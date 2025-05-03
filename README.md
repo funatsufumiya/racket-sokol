@@ -1,5 +1,5 @@
-# racket-sokol
+# (WIP) racket-sokol
 
 Racket bindings for sokol
 
-***WIP***
+***WIP, currently not working***
