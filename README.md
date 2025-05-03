@@ -4,6 +4,8 @@ Racket bindings for sokol
 
 ***WIP, currently not working***
 
+( Any forks are welcome. Other than the original copyright of sokol, I claim no specific copyright for this repo. )
+
 ## build
 
 ```bash
