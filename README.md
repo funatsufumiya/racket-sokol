@@ -1,5 +1,5 @@
 # racket-sokol
 
-Racket bindings of the Sokol graphics library
+Racket bindings for sokol
 
 ***WIP***

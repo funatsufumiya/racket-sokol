@@ -1,2 +1,3 @@
 sokol-racket/*
 __pycache__
+*.rkt~

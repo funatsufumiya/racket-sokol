@@ -135,10 +135,20 @@ def c(s, indent="", comment="#|"):
             l(f"{prefix} {line}" if line else prefix)
 
 def as_racket_identifier(name, prefix):
-    """Convert C snake_case to Racket kebab-case, remove prefix"""
+    """Convert C snake_case to Racket kebab-case, remove prefix, add module prefix"""
+    module_prefix = module_names[prefix] if prefix in module_names else ""
+    
     if name.startswith(prefix):
         name = name[len(prefix):]
-    return name.replace('_', '-')
+    
+    # Convert to kebab-case
+    result = name.replace('_', '-').lower()
+    
+    # Add module prefix
+    if module_prefix:
+        return f"{module_prefix}:{result}"
+    else:
+        return result
 
 def as_racket_type(c_type, prefix):
     """Convert C type to Racket FFI type"""
@@ -148,7 +158,7 @@ def as_racket_type(c_type, prefix):
         struct_name = c_type
         if struct_name.startswith(prefix):
             struct_name = struct_name[len(prefix):]
-        return f"_{struct_name}"
+        return f"_{as_racket_identifier(struct_name, prefix)}"
     elif c_type in enum_types:
         return "_int"  # Enums are represented as integers in FFI
     elif util.is_void_ptr(c_type):
@@ -159,18 +169,22 @@ def as_racket_type(c_type, prefix):
         return "_string/utf-8"
     elif util.is_func_ptr(c_type):
         return "_fpointer"  # Function pointers
+    elif "const" in c_type:
+        return as_racket_type(c_type.replace("const", "").strip(), prefix)
     else:
-        return f"_unknown_{c_type}"
+        # NOTE: Unknown types are treated as pointers for safety
+        print(f"Warning: Unknown type '{c_type}', treating as pointer")
+        return "_pointer"
 
 def gen_struct(decl, prefix):
-    """Generate Racket FFI struct definition"""
+    """Generate Racket FFI struct definition using define-cstruct"""
     struct_name = check_override(decl['name'])
     racket_struct_name = f"_{as_racket_identifier(struct_name, prefix)}"
+    exports = [racket_struct_name]
     
     c(decl.get('comment'))
-    l(f"(define {racket_struct_name}")
-    l(f"  (_struct")
-    l(f"   #:alignment 4  ; Assuming 4-byte alignment, adjust if needed")
+    l(f"(define-cstruct {racket_struct_name}")
+    l(f"  (")
     
     for field in decl['fields']:
         field_name = check_override(field['name'])
@@ -179,20 +193,26 @@ def gen_struct(decl, prefix):
         if util.is_1d_array_type(field_type):
             array_type = util.extract_array_type(field_type)
             array_sizes = util.extract_array_sizes(field_type)
-            l(f"   ['{field_name} (_array {as_racket_type(array_type, prefix)} {array_sizes[0]})]")
+            l(f"   [{field_name} (_array {as_racket_type(array_type, prefix)} {array_sizes[0]})]")
         elif util.is_2d_array_type(field_type):
             array_type = util.extract_array_type(field_type)
             array_sizes = util.extract_array_sizes(field_type)
-            l(f"   ['{field_name} (_array (_array {as_racket_type(array_type, prefix)} {array_sizes[1]}) {array_sizes[0]})]")
+            l(f"   [{field_name} (_array (_array {as_racket_type(array_type, prefix)} {array_sizes[1]}) {array_sizes[0]})]")
         else:
-            l(f"   ['{field_name} {as_racket_type(field_type, prefix)}]")
+            l(f"   [{field_name} {as_racket_type(field_type, prefix)}]")
     
     l(f"  ))")
     l("")
 
+    return exports
+
 def gen_enum(decl, prefix):
     """Generate Racket constants for enum values"""
     enum_name = check_override(decl['name'])
+    exports = []
+
+    # Use default value or 0 as the first value
+    next_value = 0
     
     c(decl.get('comment'))
     l(f"; Enum: {enum_name}")
@@ -201,22 +221,35 @@ def gen_enum(decl, prefix):
         item_name = check_override(item['name'])
         if item_name != "FORCE_U32":
             racket_name = as_racket_identifier(item_name, prefix)
+
+            # Use explicit value if provided, otherwise use sequence
             if 'value' in item:
-                l(f"(define {racket_name} {item['value']})")
+                value = item['value']
+                l(f"(define {racket_name} {value})")
+                next_value = int(value) + 1  # Increment for next item
             else:
-                # If no value is provided, we need to track enum values ourselves
-                l(f"; No explicit value for {racket_name}")
+                l(f"(define {racket_name} {next_value})")
+                next_value += 1
+            
+            exports.append(racket_name)
+
+    return exports
 
 def gen_consts(decl, prefix):
     """Generate constants"""
     c(decl.get('comment'))
+
+    exports = []
     
     for item in decl['items']:
         item_name = check_override(item['name'])
         racket_name = as_racket_identifier(item_name, prefix)
         l(f"(define {racket_name} {item['value']})")
+        exports.append(racket_name)
     
     l("")
+
+    return exports
 
 def gen_function(decl, prefix):
     """Generate Racket FFI function binding"""
@@ -242,6 +275,8 @@ def gen_function(decl, prefix):
     l(f"(define-sokol {racket_name}")
     l(f"  (_fun {' '.join(params)} -> {ret_type}))")
     l("")
+
+    return racket_name
 
 def check_override(name, default=None):
     """Check if a name has an override"""
@@ -279,19 +314,46 @@ def gen_module_header(inp, dep_prefixes):
     l("")
     l("(require ffi/unsafe")
     l("         ffi/unsafe/define")
+    l("         ffi/unsafe/cvector")  # For array support
     l("         racket/file)")
     
-    # Only add dependency imports if there are dependencies
+    # Add type definitions
+    l("")
+    l("; FFI base type definitions")
+    l("(define _int _int)")
+    l("(define _uint8 _uint8)")
+    l("(define _sint8 _sint8)")
+    l("(define _uint16 _uint16)")
+    l("(define _sint16 _sint16)")
+    l("(define _uint32 _uint32)")
+    l("(define _sint32 _sint32)")
+    l("(define _uint64 _uint64)")
+    l("(define _sint64 _sint64)")
+    l("(define _float _float)")
+    l("(define _double _double)")
+    l("(define _bool _bool)")
+    l("(define _byte _byte)")
+    l("(define _uintptr _uintptr)")
+    l("(define _intptr _intptr)")
+    l("(define _size _size)")
+    
+    # Define special types
+    l("")
+    l("; Special type definitions")
+    l("(define _allocator_t _pointer)")
+    l("(define _image_desc _pointer)")
+    l("(define _unknown_uint64_t _uint64)")
+    l("(define _unknown_const _pointer)")
+    l("")
+    
+    # Import dependencies with prefix
     if dep_prefixes:
-        l("")
+        l("; Module dependencies")
         for dep_prefix in dep_prefixes:
             if dep_prefix in module_names:
                 dep_module = module_names[dep_prefix]
-                l(f"(require \"../../sokol/generated/{dep_module}.rkt\")")
-    
-    l("")
-    l("(provide (all-defined-out))")
-    l("")
+                l(f"(require (prefix-in {dep_module}: \"../../sokol/generated/{dep_module}.rkt\"))")
+        l("")
     
     # Library loading
     l("; Load the sokol library")
@@ -303,31 +365,86 @@ def gen_module_header(inp, dep_prefixes):
     l("(define-ffi-definer define-sokol sokol-lib)")
     l("")
 
+
 def gen_module(inp, dep_prefixes):
     """Generate the complete module"""
     prefix = inp['prefix']
-    
-    # First, pre-parse to collect all types
-    pre_parse(inp)
+    module_name = module_names[prefix] if prefix in module_names else "sokol"
     
     # Generate module header
     gen_module_header(inp, dep_prefixes)
     
-    # Generate all declarations
+    # Track exports
+    exports = []
+    problematic_exports = set()  # Always keep as a set
+    
+    # Generate declarations
     for decl in inp['decls']:
         if decl['is_dep']:
             continue
             
         kind = decl['kind']
         if kind == 'consts':
-            gen_consts(decl, prefix)
+            try:
+                decl_exports = gen_consts(decl, prefix)
+                if decl_exports:
+                    exports.extend(decl_exports)
+            except Exception as e:
+                print(f"  Warning: Error generating constants: {e}")
         elif not check_ignore(decl['name']):
             if kind == 'struct':
-                gen_struct(decl, prefix)
+                try:
+                    decl_exports = gen_struct(decl, prefix)
+                    
+                    # If this is the problematic pass-action struct in gfx module
+                    if prefix == 'sg_' and 'pass_action' in decl['name']:
+                        struct_name = f"gfx:pass-action"
+                        problematic_exports.add(struct_name)
+                        problematic_exports.add(f"make-{struct_name}")
+                        problematic_exports.add(f"{struct_name}?")
+                        problematic_exports.add(f"set-{struct_name}!")
+                        
+                        # Add field accessors and setters
+                        for field in ["colors", "depth", "stencil"]:
+                            problematic_exports.add(f"{struct_name}-{field}")
+                            problematic_exports.add(f"set-{struct_name}-{field}!")
+                    
+                    if decl_exports:
+                        exports.extend(decl_exports)
+                except Exception as e:
+                    print(f"  Warning: Error generating struct {decl['name']}: {e}")
             elif kind == 'enum':
-                gen_enum(decl, prefix)
+                try:
+                    decl_exports = gen_enum(decl, prefix)
+                    if decl_exports:
+                        exports.extend(decl_exports)
+                except Exception as e:
+                    print(f"  Warning: Error generating enum {decl['name']}: {e}")
             elif kind == 'func':
-                gen_function(decl, prefix)
+                try:
+                    func_export = gen_function(decl, prefix)
+                    if func_export:
+                        exports.append(func_export)
+                except Exception as e:
+                    print(f"  Warning: Error generating function {decl['name']}: {e}")
+    
+    # Generate explicit export list
+    l("; Explicit export list")
+    l("(provide")
+    for export in exports:
+        if export not in problematic_exports:
+            l(f"  {export}")
+    l(")")
+    
+    # For gfx.rkt file specifically, add special handling to avoid duplicates
+    if prefix == 'sg_':
+        l("")
+        l(";; Special handling for gfx module to avoid duplicates")
+        l("(provide (except-out (all-defined-out)")
+        for item in sorted(problematic_exports):  # Sort for readability
+            l(f"                  {item}")
+        l("))")
+
 
 def prepare():
     """Prepare output directories and create dummy C files"""
