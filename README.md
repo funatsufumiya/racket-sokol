@@ -1,6 +1,6 @@
 # (WIP) racket-sokol
 
-Racket bindings for sokol
+Racket bindings for [sokol](https://github.com/floooh/sokol)
 
 ***WIP, currently not working***
 
