@@ -1,9 +1,21 @@
-# racket-sokol
+# (WIP) racket-sokol
 
-Racket bindings for sokol
+Racket bindings for [sokol](https://github.com/floooh/sokol)
 
-***WIP***
+***WIP, currently not working***
 
-## Notes
+- Any forks are welcome. Other than the original copyright of sokol, I claim no specific copyright for this repo.
+
+## Build
+
+```bash
+$ python bindgen/gen_all.py
+```
+
+## Development side notes
+
+- `bindgen/gen_ir.py` and `bindgen/gen_util.py` were copied from original sokol code.
+
+## Other notes
 
 - This project is developed with assistence with coding assistent AI (Cody).
